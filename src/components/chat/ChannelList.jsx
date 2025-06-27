@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { useToast } from '@/hooks/use-toast';
-import { Plus } from "lucide-react";
+import { LogOut, Plus } from "lucide-react";
 import { 
   Dialog, 
   DialogContent, 
@@ -12,6 +12,12 @@ import {
   DialogHeader, 
   DialogTitle 
 } from '@/components/ui/dialog';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -31,41 +37,41 @@ function ChannelList({ activeChannel, onSelectChannel, user }) {
   
   // Fetch user channels when component mounts or user changes
   useEffect(() => {
-    const fetchUserChannels = async () => {
-      if (!user || !user.id) {
-        return;
+    fetchUserChannels();
+  }, [user]);
+
+  const fetchUserChannels = async () => {
+    if (!user || !user.id) {
+      return;
+    }
+    
+    setIsLoading(true);
+    try {
+      const response = await fetch(`http://localhost:6869/api/v1/users/${user.id}/channels`);
+      
+      if (!response.ok) {
+        throw new Error(`Failed to fetch channels: ${response.status}`);
       }
       
-      setIsLoading(true);
-      try {
-        const response = await fetch(`http://localhost:6869/api/v1/users/${user.id}/channels`);
-        
-        if (!response.ok) {
-          throw new Error(`Failed to fetch channels: ${response.status}`);
-        }
-        
-        const data = await response.json();
-        // Updated to set channels from data.channels instead of directly using data
-        setChannels(data.channels);
-      } catch (error) {
-        console.error('Error fetching channels:', error);
-        toast({
-          title: 'Error',
-          description: 'Failed to load channels. Please try again later.',
-        });
-        // Fallback to default channels if API fails
-        setChannels([
-          { id: 'Channel1', ch_name: '#Channel1' },
-          { id: 'Channel2', ch_name: '#Channel2' },
-          { id: 'Channel3', ch_name: '#Channel3' },
-        ]);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    
-    fetchUserChannels();
-  }, [user, toast]);
+      const data = await response.json();
+      // Updated to set channels from data.channels instead of directly using data
+      setChannels(data.channels);
+    } catch (error) {
+      console.error('Error fetching channels:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to load channels. Please try again later.',
+      });
+      // Fallback to default channels if API fails
+      setChannels([
+        { id: 'Channel1', ch_name: '#Channel1' },
+        { id: 'Channel2', ch_name: '#Channel2' },
+        { id: 'Channel3', ch_name: '#Channel3' },
+      ]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const handleProfileClick = () => {
     navigate('/dashboard'); // Navigate to the profile/dashboard page
@@ -143,6 +149,58 @@ function ChannelList({ activeChannel, onSelectChannel, user }) {
     }
   };
 
+  const handleLeaveChannel = async (channelId) => {
+    if (!user || !user.id) {
+      toast({
+        title: "Error",
+        description: "User information not available. Please login again."
+      });
+      return;
+    }
+
+    try {
+      const response = await fetch(`http://localhost:6869/api/v1/channels/${channelId}/leave`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          user_id: user.id
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to leave channel: ${response.status}`);
+      }
+
+      // Remove the channel from the list
+      setChannels(prevChannels => prevChannels.filter(channel => channel.id !== channelId));
+      
+      // If the active channel is the one we just left, select another channel if available
+      if (activeChannel === channelId) {
+        const nextChannel = channels.find(channel => channel.id !== channelId);
+        if (nextChannel) {
+          handleChannelSelect(nextChannel.id);
+        } else {
+          // Clear active channel if no other channels are available
+          localStorage.removeItem('activeChannelId');
+          onSelectChannel(null);
+        }
+      }
+      
+      toast({
+        title: "Success",
+        description: "You have left the channel."
+      });
+    } catch (error) {
+      console.error('Error leaving channel:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to leave channel. Please try again.'
+      });
+    }
+  };
+
   // Get avatar from user prop if available
   const avatarUrl = user?.avatar_url || "";
   const displayName = user?.display_name || user?.username || "User";
@@ -170,17 +228,30 @@ function ChannelList({ activeChannel, onSelectChannel, user }) {
             {channels.length > 0 ? (
               channels.map((channel) => (
                 <li key={channel.id}>
-                  <button
-                    onClick={() => handleChannelSelect(channel.id)}
-                    className={cn(
-                      'w-full text-left p-3 rounded-md font-medium transition-colors',
-                      activeChannel === channel.id
-                        ? 'bg-yellow-300 text-gray-900'
-                        : 'bg-yellow-200 text-gray-800 hover:bg-yellow-300'
-                    )}
-                  >
-                    {channel.ch_name || `#${channel.id}`}
-                  </button>
+                  <ContextMenu>
+                    <ContextMenuTrigger asChild>
+                      <button
+                        onClick={() => handleChannelSelect(channel.id)}
+                        className={cn(
+                          'w-full text-left p-3 rounded-md font-medium transition-colors',
+                          activeChannel === channel.id
+                            ? 'bg-yellow-300 text-gray-900'
+                            : 'bg-yellow-200 text-gray-800 hover:bg-yellow-300'
+                        )}
+                      >
+                        {channel.ch_name || `#${channel.id}`}
+                      </button>
+                    </ContextMenuTrigger>
+                    <ContextMenuContent className="w-48">
+                      <ContextMenuItem 
+                        className="flex items-center gap-2 text-red-500 focus:text-red-500 cursor-pointer" 
+                        onClick={() => handleLeaveChannel(channel.id)}
+                      >
+                        <LogOut className="h-4 w-4" />
+                        <span>Leave channel</span>
+                      </ContextMenuItem>
+                    </ContextMenuContent>
+                  </ContextMenu>
                 </li>
               ))
             ) : (
