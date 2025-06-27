@@ -3,6 +3,18 @@ import { useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { useToast } from '@/hooks/use-toast';
+import { Plus } from "lucide-react";
+import { 
+  Dialog, 
+  DialogContent, 
+  DialogDescription, 
+  DialogFooter, 
+  DialogHeader, 
+  DialogTitle 
+} from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 
 /**
  * Component for displaying channel list in the sidebar
@@ -12,6 +24,10 @@ function ChannelList({ activeChannel, onSelectChannel, user }) {
   const { toast } = useToast();
   const [channels, setChannels] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [newChannelName, setNewChannelName] = useState('');
+  const [newChannelDescription, setNewChannelDescription] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
   
   // Fetch user channels when component mounts or user changes
   useEffect(() => {
@@ -62,6 +78,71 @@ function ChannelList({ activeChannel, onSelectChannel, user }) {
     onSelectChannel(channelId);
   };
 
+  const handleCreateChannel = async () => {
+    if (!newChannelName.trim()) {
+      toast({
+        title: "Error",
+        description: "Channel name is required."
+      });
+      return;
+    }
+
+    if (!user || !user.id) {
+      toast({
+        title: "Error",
+        description: "User information not available. Please login again."
+      });
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      const response = await fetch(`http://localhost:6869/api/v1/channels`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ch_name: newChannelName,
+          ch_desc: newChannelDescription,
+          is_private: false,
+          creator_id: user.id
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to create channel: ${response.status}`);
+      }
+
+      const data = await response.json();
+      
+      // Add the newly created channel to the list
+      setChannels(prevChannels => [...prevChannels, data.channel]);
+      
+      // Close the dialog and reset form
+      setIsCreateDialogOpen(false);
+      setNewChannelName('');
+      setNewChannelDescription('');
+      
+      toast({
+        title: "Success",
+        description: "Channel created successfully!"
+      });
+
+      // Optionally select the newly created channel
+      handleChannelSelect(data.channel.id);
+    } catch (error) {
+      console.error('Error creating channel:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to create channel. Please try again.'
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   // Get avatar from user prop if available
   const avatarUrl = user?.avatar_url || "";
   const displayName = user?.display_name || user?.username || "User";
@@ -69,7 +150,19 @@ function ChannelList({ activeChannel, onSelectChannel, user }) {
   return (
     <div className="flex flex-col h-full">
       <div className="flex-1">
-        <h2 className="text-lg font-semibold mb-4 text-gray-800">Channels</h2>
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-lg font-semibold text-gray-800">Channels</h2>
+          <Button 
+            variant="ghost" 
+            size="icon" 
+            onClick={() => setIsCreateDialogOpen(true)}
+            className="rounded-full hover:bg-sky-600 hover:text-white"
+            title="Create a new channel"
+          >
+            <Plus />
+            <span className="sr-only">Add channel</span>
+          </Button>
+        </div>
         {isLoading ? (
           <div className="py-4 text-center text-gray-500">Loading channels...</div>
         ) : (
@@ -113,6 +206,60 @@ function ChannelList({ activeChannel, onSelectChannel, user }) {
           <span className="font-medium text-gray-800">{displayName}</span>
         </div>
       </div>
+
+      {/* Create Channel Dialog */}
+      <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create New Channel</DialogTitle>
+            <DialogDescription>
+              Enter the details for your new channel. Click create when you're done.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="grid gap-4 py-4">
+            <div className="grid grid-cols-4 items-center gap-4">
+              <label htmlFor="channelName" className="text-right font-medium">
+                Name
+              </label>
+              <Input
+                id="channelName"
+                value={newChannelName}
+                onChange={(e) => setNewChannelName(e.target.value)}
+                placeholder="e.g., project-announcements"
+                className="col-span-3"
+                required
+              />
+            </div>
+            
+            <div className="grid grid-cols-4 items-center gap-4">
+              <label htmlFor="channelDescription" className="text-right font-medium">
+                Description
+              </label>
+              <Textarea
+                id="channelDescription"
+                value={newChannelDescription}
+                onChange={(e) => setNewChannelDescription(e.target.value)}
+                placeholder="What is this channel about?"
+                className="col-span-3"
+                rows={3}
+              />
+            </div>
+          </div>
+          
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsCreateDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button 
+              onClick={handleCreateChannel} 
+              disabled={isSubmitting || !newChannelName.trim()}
+            >
+              {isSubmitting ? 'Creating...' : 'Create Channel'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

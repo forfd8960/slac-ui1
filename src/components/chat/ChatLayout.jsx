@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { cn } from '@/lib/utils';
 import ChannelList from './ChannelList';
 import ChatContent from './ChatContent';
@@ -9,18 +9,23 @@ import { useToast } from '@/hooks/use-toast';
  * Main chat layout component that organizes the entire chat interface
  */
 function ChatLayout({ className }) {
-  const [activeChannel, setActiveChannel] = useState(1);
+  const [activeChannel, setActiveChannel] = useState('Channel1');
   const [messages, setMessages] = useState({});
   const [user, setUser] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
+  const websocketRef = useRef(null);
 
   // Get user data from localStorage
   useEffect(() => {
     try {
       const userData = localStorage.getItem('user');
       if (userData) {
-        setUser(JSON.parse(userData));
+        const parsedUser = JSON.parse(userData);
+        setUser(parsedUser);
+        
+        // Initialize WebSocket connection when user data is available
+        initWebSocket(parsedUser.id);
       }
       
       // Set active channel from localStorage if available
@@ -31,7 +36,87 @@ function ChatLayout({ className }) {
     } catch (error) {
       console.error("Error parsing user data from localStorage:", error);
     }
+    
+    // Cleanup WebSocket on unmount
+    return () => {
+      if (websocketRef.current) {
+        websocketRef.current.close();
+      }
+    };
   }, []);
+
+  // Initialize WebSocket connection
+  const initWebSocket = (userId) => {
+    if (!userId) return;
+    
+    try {
+      const ws = new WebSocket(`http://localhost:6869/${userId}/websocket`);
+      
+      ws.onopen = () => {
+        console.log('WebSocket connection established');
+      };
+      
+      ws.onmessage = (event) => {
+        try {
+          // Parse the JSON data from the WebSocket
+          const messageData = JSON.parse(event.data);
+          const channelId = localStorage.getItem('activeChannelId') || activeChannel;
+          
+          // Extract sender information from the message
+          const sender = messageData.sender || {};
+          const senderId = sender.id || 'unknown';
+          const senderName = sender.display_name || `User ${senderId}`;
+          const senderAvatar = sender.avatar_url || '';
+          
+          // Create a new message object from the WebSocket data
+          const newMessage = {
+            id: `ws-${Date.now()}`,
+            text: messageData.text_content || '',
+            sender: senderName,
+            senderId: senderId,
+            senderAvatar: senderAvatar,
+            timestamp: new Date().toLocaleTimeString(),
+            contentType: messageData.content_type || 'text',
+            mediaUrl: messageData.media_url || '',
+            mediaMetadata: messageData.media_metadata || null,
+            parentMsgId: messageData.parent_msg_id || null
+          };
+          
+          // Add the message to the current channel's message list
+          setMessages(prev => ({
+            ...prev,
+            [channelId]: [
+              ...(prev[channelId] || []),
+              newMessage
+            ]
+          }));
+        } catch (error) {
+          console.error('Error parsing WebSocket message:', error);
+          console.log('Raw message:', event.data);
+        }
+      };
+      
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        toast({
+          title: 'WebSocket Error',
+          description: 'Connection to chat server failed. Some messages may not be received.',
+        });
+      };
+      
+      ws.onclose = () => {
+        console.log('WebSocket connection closed');
+      };
+      
+      websocketRef.current = ws;
+    } catch (error) {
+      console.error('Error initializing WebSocket:', error);
+      toast({
+        title: 'Connection Error',
+        description: 'Failed to connect to chat server. Please refresh the page.',
+      });
+    }
+  };
 
   // Fetch messages when active channel changes
   useEffect(() => {
@@ -49,7 +134,7 @@ function ChatLayout({ className }) {
         offset: 0,
         limit: 10
       });
-
+      
       // GET request with query parameters in the URL
       const response = await fetch(`http://localhost:6869/api/v1/channels/${channelId}/messages?${queryParams}`, {
         method: 'GET',
@@ -71,6 +156,9 @@ function ChatLayout({ className }) {
         text: msg.text_content,
         sender: `User ${msg.sender_id}`, // Ideally we would have user data to display actual names
         timestamp: new Date(msg.created_at).toLocaleTimeString(),
+        contentType: msg.content_type || 'text',
+        mediaUrl: msg.media_url || '',
+        mediaMetadata: msg.media_metadata || null,
         raw: msg // Keep the raw data for reference if needed
       }));
       
@@ -128,6 +216,8 @@ function ChatLayout({ className }) {
       text: message,
       sender: user.username || "You",
       timestamp: new Date().toLocaleTimeString(),
+      contentType: "text",
+      mediaUrl: "",
       isSending: true
     };
     
@@ -151,6 +241,25 @@ function ChatLayout({ className }) {
       
       if (!response.ok) {
         throw new Error(`Failed to send message: ${response.status}`);
+      }
+      
+      // Send message to WebSocket
+      if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN) {
+        // Send the WebSocket message with the required format
+        const wsMessagePayload = {
+          channel_id: channelId,
+          msgs: [
+            {
+              sender_id: user.id,
+              parent_msg_id: null,
+              content_type: "text",
+              text_content: message,
+              media_url: "",
+              media_metadata: null
+            }
+          ]
+        };
+        websocketRef.current.send(JSON.stringify(wsMessagePayload));
       }
       
       // On success, refresh messages to show the sent message with its server ID
